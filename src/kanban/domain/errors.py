@@ -5,3 +5,7 @@ class DiscardedEntityError(Exception):
 
 class ConstraintError(Exception):
     pass
+
+
+class ColumnNotEmptyError(ConstraintError):
+    pass

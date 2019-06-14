@@ -66,13 +66,9 @@ class ColumnRemovedEvent(DomainEvent):
         super().__init__(board_id, board_version, column_id=column_id)
 
 
-class ColumnInsertedBeforeEvent(DomainEvent):
-    def __init__(self, board_id: uuid.UUID, board_version: int, target_column_id: uuid.UUID, column_name: str):
-        super().__init__(board_id, board_version, target_column_id=target_column_id, column_name=column_name)
-
-
-class ColumnInsertedAfterEvent(ColumnInsertedBeforeEvent):
-    pass
+class ColumnInsertedEvent(DomainEvent):
+    def __init__(self, board_id: uuid.UUID, board_version: int, index: int, column_name: str):
+        super().__init__(board_id, board_version, index=index, column_name=column_name)
 
 
 class WorkItemScheduledEvent(DomainEvent):
@@ -82,13 +78,12 @@ class WorkItemScheduledEvent(DomainEvent):
 
 class WorkItemAdvancedEvent(DomainEvent):
     def __init__(self, board_id: uuid.UUID, board_version: int, item_id: uuid.UUID, 
-        source_column_id: uuid.UUID, destination_column_id: uuid.UUID):
+        source_column_index: int):
         super().__init__(
             board_id,
             board_version,
             item_id=item_id, 
-            source_column_id=source_column_id, 
-            destination_column_id=destination_column_id
+            source_column_index=source_column_index
         )
 
 class WorkItemRetiredEvent(DomainEvent):

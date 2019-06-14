@@ -1,15 +1,57 @@
 import uuid
 import datetime
+import typing
+import functools
+import kanban.domain.events as ev
 from .entity import Entity
 from .errors import ConstraintError, ColumnNotEmptyError, DiscardedEntityError
 
 
+def _validate_content(content: str) -> str:
+    if not content or len(content) < 1:
+        raise ValueError("Can not be empty")
+    return content
+
+
+def method_dispatch(func):
+    dispatcher = functools.singledispatch(func)
+
+    def wrapper(*args, **kw):
+        return dispatcher.dispatch(args[1].__class__)(*args, **kw)
+
+    wrapper.register = dispatcher.register
+    functools.update_wrapper(wrapper, func)
+    return wrapper
+
+
 class WorkItem(Entity):
-    def __init__(self, name: str, content: str, duedate: datetime.date):
-        super().__init__(uuid.uuid4(), 0)
-        self._name = name
-        self._content = content
-        self._duedate = duedate
+    # def __init__(self, name: str, content: str, duedate: datetime.date):
+    #     super().__init__(uuid.uuid4(), 0)
+    #     self._name = name
+    #     self._content = content
+    #     self._duedate = duedate
+
+    def __init__(self, events: typing.List[ev.DomainEvent]):
+        super().__init__(None, None)
+        for event in events:
+            self.apply(event)
+        self.changes = []
+
+    @method_dispatch
+    def apply(self, event):
+        raise ValueError("Unrecognised event")
+
+    @apply.register(ev.WorkItemCreatedEvent)
+    def _(self, event: ev.WorkItemCreatedEvent):
+        self._id = event.originator_id
+        self._version = event.originator_version
+        self._name = event.item_name
+        self._content = event.content
+        self._duedate = event.duedate
+
+    @apply.register(ev.AttributeChangedEvent)
+    def _(self, event: ev.AttributeChangedEvent):
+        self.__dict__[event.attribute_name] = event.attribute_value
     
     @property
     def name(self) -> str:
@@ -29,24 +71,45 @@ class WorkItem(Entity):
         self._check_not_discarded()
         return self._duedate
 
+    @classmethod
+    def create(cls, name: str, content: str, duedate: datetime.date):
+        name = _validate_content(name)
+        content = _validate_content(content)
+        duedate = cls._validate_date(duedate)
+        event = ev.WorkItemCreatedEvent(name, content, duedate)
+        instance = cls([event])
+        instance.changes = [event]
+        return instance
+
+    @staticmethod
+    def _validate_date(date: datetime.date):
+        if date < datetime.date.today():
+            raise ValueError("Duedate cannot be in the past")
+        return date
+
     def update_name(self, name: str) -> None: 
         """Update workitem name"""
         self._check_not_discarded()
-        if not name or len(name) < 1:
-            raise ValueError("Workitem name cannot be empty")
-        self._name = name
+        name = _validate_content(name)
+        event = ev.AttributeChangedEvent(self.id, self.version, '_name', name)
+        self.apply(event)
+        self.changes.append(event)
 
     def update_content(self, content: str):
         """Update workitem content"""
         self._check_not_discarded()
-        if not content or len(content) < 1:
-            raise ValueError("Workitem content cannot be empty")
-        self._content = content
+        content = _validate_content(content)
+        event = ev.AttributeChangedEvent(self.id, self.version, '_content', content)
+        self.apply(event)
+        self.changes.append(event)
 
     def update_duedate(self, date: datetime.date):
         """Update duedate for the workitem"""
         self._check_not_discarded()
-        self._duedate = date
+        duedate = self._validate_date(date)
+        event = ev.AttributeChangedEvent(self.id, self.version, '_duedate', duedate)
+        self.apply(event)
+        self.changes.append(event)
 
 
 class Column(Entity):
@@ -85,11 +148,12 @@ class Column(Entity):
 
 
 class Board(Entity):
-    def __init__(self, name: str, description: str):
-        super().__init__(uuid.uuid4(), 0)
-        self._name = name
-        self._description = description
-        self._columns = []  
+    def __init__(self, events: typing.List[ev.DomainEvent]):
+        super().__init__(None, None)
+        for event in events:
+            self.apply(event)
+        self.changes = [] 
+        self._columns = []
 
     @property
     def name(self) -> str:
@@ -100,6 +164,15 @@ class Board(Entity):
     def desciption(self) -> str:
         self._check_not_discarded()
         return self._description
+
+    @classmethod
+    def create(cls, name: str, description: str):
+        name = _validate_content(name)
+        description = _validate_content(description)
+        event = ev.BoardCreatedEvent(name, description)
+        instance = cls([event])
+        instance.changes = [event]
+        return instance
 
     def __contains__(self, item: WorkItem):
         for column in self._columns:
@@ -139,40 +212,54 @@ class Board(Entity):
         self._check_not_discarded()
         if not name or len(name) < 1:
             raise ValueError("Board name can not be empty")
-        self._name = name
+        event = ev.AttributeChangedEvent(self.id, self.version, '_name', name)
+        self.apply(event)
+        self.changes.append(event)
 
     def update_description(self, desciption: str):
         self._check_not_discarded()
         if not desciption or len(desciption) < 1:
             raise ValueError("Board description can not be empty")
-        self._description = desciption
+        event = ev.AttributeChangedEvent(self.id, self.version, '_description', desciption)
+        self.apply(event)
+        self.changes.append(event)
 
     def add_new_column(self, column_name: str):
         """Add a new column to the board"""
         self._check_not_discarded()
-        column: Column = Column(column_name) # validate name before creating column
-        self._columns.append(column) 
+        column_name = _validate_content(column_name)
+        event = ev.ColumnAddedEvent(self.id, self.version, column_name)
+        self.apply(event)
+        self.changes.append(event)
 
     def insert_column_before(self, target_column_id: uuid.UUID, name: str):
         """
         Insert a column before(to the left of) column with target_column_id
         """
         self._check_not_discarded()
+        name = _validate_content(name)
         target_column_index = self._column_index_with_id(target_column_id)
-        self._columns.insert(target_column_index, Column(name))
+        event = ev.ColumnInsertedEvent(self.id, self.version, target_column_index, name)
+        self.app(event)
+        self.changes.append(event)
 
     def insert_column_after(self, target_column_id: uuid.UUID, name:str):
         """
         Insert a column after(to the right of) column with target_column_id
         """
         self._check_not_discarded()
+        name = _validate_content(name)
         target_column_index = self._column_index_with_id(target_column_id)
-        self._columns.insert(target_column_index+1, Column(name))
+        event = ev.ColumnInsertedEvent(self.id, self.version, target_column_index+1, name)
+        self.app(event)
+        self.changes.append(event)
 
     def remove_column(self, column: Column):
         self._check_not_discarded()
         if self._can_remove_column(column):
-            self._columns.remove(column)
+            event = ev.ColumnRemovedEvent(self.id, self.version, column.id)
+            self.apply(event)
+            self.changes.append(event)
         raise ColumnNotEmptyError(f"Cannot remove column {column.id}")
 
     def remove_column_with_id(self, column_id: uuid.UUID):
@@ -195,8 +282,9 @@ class Board(Entity):
         first_column: Column = self._columns[0]
         if first_column.discarded: # ensure first column is not discarded
             raise DiscardedEntityError(f"Column {first_column.id} is no longer in use")
-
-        first_column.work_item_ids.append(item.id)
+        event = ev.WorkItemScheduledEvent(self.id, self.version, item.id)
+        self.apply(event)
+        self.changes.append(event)
 
     def advance_work_item(self, item: WorkItem):
         """Move workitem to the next column"""
@@ -210,9 +298,9 @@ class Board(Entity):
         destination_column: Column = self._columns[destination_column_index]
         if destination_column.discarded:
             raise DiscardedEntityError(f"Column {destination_column.id} is no longer in use")
-        source_column: Column = self._columns[source_column_index]
-        source_column.work_item_ids.remove(item.id)
-        destination_column.work_item_ids.append(item.id)
+        event = ev.WorkItemAdvancedEvent(self.id, self.version, item.id, source_column_index)
+        self.apply(event)
+        self.changes.append(event)
 
     def retire_work_item(self, item: WorkItem):
         """ Retire work item from the last column"""
@@ -225,149 +313,54 @@ class Board(Entity):
             raise ConstraintError(f"Cannot retire item {item.id} from a board with no columns")
         except ValueError:
             raise ConstraintError(f"{item.id} not available for retiring from last column of board")
+        event = ev.WorkItemRetiredEvent(self.id, self.version, item.id)
+        self.apply(event)
+        self.changes.append(event)
+    
+    @method_dispatch
+    def apply(self, event):
+        raise NotImplementedError("Unrecognized event")
+
+    @apply.register(ev.BoardCreatedEvent)
+    def _(self, event: ev.BoardCreatedEvent):
+        self._id = event.originator_id
+        self._version = event.originator_version
+        self._name = event.board_name
+        self._description = event.description
+
+    @apply.register(ev.ColumnAddedEvent)
+    def _(self, event: ev.ColumnAddedEvent):
+        column: Column = Column(event.column_name)
+        self._columns.append(column)
+
+    @apply.register(ev.ColumnInsertedEvent)
+    def _(self, event: ev.ColumnInsertedEvent):
+        column: Column = Column(event.column_name)
+        self._columns.insert(event.index, column)
+
+    @apply.register(ev.ColumnRemovedEvent)
+    def _(self, event: ev.ColumnRemovedEvent):
+        column: Column = self._column_with_id(event.column_id)
+        self._columns.remove(column)
+
+    @apply.register(ev.WorkItemScheduledEvent)
+    def _(self, event: ev.WorkItemScheduledEvent):
+        first_column: Column = self._columns[0]
+        first_column.work_item_ids.append(event.item_id)
+
+    @apply.register(ev.WorkItemAdvancedEvent)
+    def _(self, event: ev.WorkItemAdvancedEvent):
+        source_column: Column = self._columns[event.source_column_index]
+        next_column: Column = self._columns[event.source_column_index+1]
+        source_column.work_item_ids.remove(event.item_id)
+        next_column.work_item_ids.append(event.item_id)
+        
+
+    @apply.register(ev.WorkItemRetiredEvent)
+    def _(self, event: ev.WorkItemRetiredEvent):
         last_column: Column = self._columns[-1]
-        last_column.work_item_ids.remove(item.id)
-        
-        
+        last_column.work_item_ids.remove(event.item_id)
 
-
-# import uuid
-# import datetime
-# from .entity import Entity
-# from .errors import ConstraintError
-
-# # ================ Aggregate Root Entities ===============
-# class Board(Entity):
-#     """
-#     A kanban board which tracks the progress of workitems in a step-wise process.
-#     """
-
-#     def __init__(self, name: str, description: str):
-#         """Initialize a board"""
-#         super.__init__(uuid.uuid4(), 0)
-#         self._name =  name
-#         self._description = description
-#         self._columns = []
-
-#     @property
-#     def name(self):
-#         """Name of board"""
-#         self._check_not_discarded()
-#         return self._name
-
-#     @name.setter
-#     def name(self, value):
-#         self._check_not_discarded()
-#         if len(value) <= 4 or len(value) > 15:
-#             raise ConstraintError("Name of board must be between 5-15 characters")
-#         self._name = value 
-
-#     @property
-#     def desciption(self):
-#         """Board description"""
-#         self._check_not_discarded()
-#         return self._description
-
-#     @desciption.setter
-#     def description(self, value: str):
-#         """Description of board, usually the purpose of the board"""
-#         self._check_not_discarded()
-#         if len(value) < 10 or len(value) > 100:
-#             raise ConstraintError("Board description must be between 10 to 100 characters")
-#         self._description = value
-
-#     def __contains__(self, workitem: WorkItem):
-#         for column in self._columns:
-#             if workitem in column:
-#                 return True
-#         return False
-
-#     def _find_column(self, column_id: uuid.UUID) -> Column:
-#         for column in self._columns:
-#             if column.id == column_id:
-#                 return column
-#         raise ValueError(f"Column {uuid} is not in board")
-
-#     def _find_column_by_name(self, column_name: str) -> Column:
-#         for column in self._columns:
-#             if column.name == column_name:
-#                 return column
-#         raise ValueError(f"Column with name {column_name} is not in board")
-
-#     def _find_column_index(self, column: Column):
-#         for index, column in enumerate(self._columns):
-#             if column == column:
-#                 return index
-#         raise ValueError(f"Column {column.id} is not on board")
-
-#     def _find_column_index_by_id(self, column_id: int):
-#         for index, column in enumerate(self._columns):
-#             if column.id == column_id:
-#                 return index
-#         raise ValueError(f"Column {column.id} is not on board")
-
-#     def add_column(self, column: Column) -> None:
-#         """Add a new column to the board"""
-#         self._check_not_discarded()
-#         self._columns.append(column)
-
-#     def remove_column(self, column_id: uuid.UUID) -> None:
-#         """Remove a column from the board by id"""
-#         self._check_not_discarded()
-#         target_column = self._find_column(column_id)
-#         self._columns.remove(target_column)
-
-#     def remove_column_with_name(self, column_name: str) -> None:
-#         """Remove a column from the board by name"""
-#         self._check_not_discarded()
-#         target_column = self._find_column_by_name(column_name)
-#         self._columns.remove(target_column)
-
-    
-#     def insert_column_before(self, target_column_id: uuid.UUID, name: str): 
-#         """Insert a column before the column in target id """
-#         self._check_not_discarded()
-#         column_index = self._find_column_index_by_id(target_column_id)
-#         self._columns.insert(column_index, Column(name))
-
-#     def insert_column_after(self, column_id: uuid.UUID, name: str):
-#          """Insert a column after the column in target id """
-#         self._check_not_discarded()
-#         column_index = self._find_column_index_by_id(target_column_id)
-#         self._columns.insert(column_index+, Column(name))
-
-#     def schedule_work_item(self, workitem: WorkItem) -> None:
-#         self._check_not_discarded()
-#         workitem._check_not_discarded()
-#         if len(self._columns) < 1:
-#             raise ConstraintError("Board has no columns")
-#         if workitem in self:
-#             raise ConstraintError(f"Workitem {workitem.id} already exists")
-#         first_column = self._columns[0]
-#         first_column._check_not_discarded()
-#         first_column._work_item_ids.add(workitem.id)
-
-#     def advance_work_item(self, workitem: WorkItem) -> None:
-#         pass
-
-#     def reverse_work_item(self, workitem: WorkItem) -> None:
-#         pass
-
-
-
-# class WorkItem(Entity):
-    
-#     def __init__(self, name: str, content: str, duedate):
-#         self._name = name
-#         self._content = content
-#         self._duedate = duedate
-
-
-# # ================== Entities =========================
-# class Column(Entity):
-    
-#     def __init__(self, name):
-#         self._name = name
-#         self._work_item_ids = []
-
-
+    @apply.register(ev.AttributeChangedEvent)
+    def _(self, event: ev.AttributeChangedEvent):
+        self.__dict__[event.attribute_name] = event.attribute_value        

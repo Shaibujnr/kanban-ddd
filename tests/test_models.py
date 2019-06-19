@@ -1,7 +1,7 @@
 import datetime
 import pytest
 from kanban.domain.models import WorkItem, Column, Board
-import kanban.domain.errors as kanban_error
+import kanban.errors as kanban_error
 
 
 def test_init_workitem():

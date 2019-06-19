@@ -3,7 +3,7 @@ import typing
 import uuid
 from kanban.domain.events import DomainEvent
 from kanban.infrastructure.eventstore import EventStream
-from kanban.domain.errors import DiscardedEntityError
+from kanban.errors import DiscardedEntityError
 
 
 class AggregateRoot(metaclass=abc.ABCMeta):

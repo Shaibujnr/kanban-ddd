@@ -37,7 +37,7 @@ class DomainEvent:
 
     def as_dict(self):
         return {
-            'aggregate_uuid': self.aggregate_uuid,
+            'aggregate_uuid': str(self.aggregate_uuid),
             'event_name': self.event_name,
             'timestamp': self.timestamp,
             'data': self.data

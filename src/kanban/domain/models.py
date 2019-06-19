@@ -5,7 +5,7 @@ import functools
 import kanban.domain.events as ev
 from .entity import Entity
 from .aggregate import AggregateRoot
-from .errors import ConstraintError, ColumnNotEmptyError, DiscardedEntityError
+from kanban.errors import ConstraintError, ColumnNotEmptyError, DiscardedEntityError
 from kanban.infrastructure.eventstore import EventStream
 
 
@@ -147,8 +147,9 @@ class Column(Entity):
 
 class Board(AggregateRoot):
     def __init__(self, stream: EventStream):
-        super().__init__(stream)
         self._columns = []
+        super().__init__(stream)
+        
 
     @property
     def name(self) -> str:

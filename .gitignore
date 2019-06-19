@@ -170,3 +170,5 @@ venv/
 
 ## front-end
 node_modules/
+
+*.json

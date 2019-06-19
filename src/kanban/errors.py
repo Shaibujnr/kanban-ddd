@@ -9,3 +9,11 @@ class ConstraintError(Exception):
 
 class ColumnNotEmptyError(ConstraintError):
     pass
+
+class AggregateNotFoundError(Exception):
+    """Raises when the aggregate does not exist in the store"""
+    pass
+
+
+class ConcurrentWriteError(Exception):
+    pass

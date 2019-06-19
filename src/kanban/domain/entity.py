@@ -1,5 +1,5 @@
 import uuid
-from .errors import DiscardedEntityError
+from kanban.errors import DiscardedEntityError
 
 
 class Entity:

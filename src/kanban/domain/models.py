@@ -4,7 +4,9 @@ import typing
 import functools
 import kanban.domain.events as ev
 from .entity import Entity
+from .aggregate import AggregateRoot
 from .errors import ConstraintError, ColumnNotEmptyError, DiscardedEntityError
+from kanban.infrastructure.eventstore import EventStream
 
 
 def _validate_content(content: str) -> str:
@@ -24,18 +26,7 @@ def method_dispatch(func):
     return wrapper
 
 
-class WorkItem(Entity):
-    # def __init__(self, name: str, content: str, duedate: datetime.date):
-    #     super().__init__(uuid.uuid4(), 0)
-    #     self._name = name
-    #     self._content = content
-    #     self._duedate = duedate
-
-    def __init__(self, events: typing.List[ev.DomainEvent]):
-        super().__init__(None, None)
-        for event in events:
-            self.apply(event)
-        self.changes = []
+class WorkItem(AggregateRoot):
 
     @method_dispatch
     def apply(self, event):
@@ -43,16 +34,14 @@ class WorkItem(Entity):
 
     @apply.register(ev.WorkItemCreatedEvent)
     def _(self, event: ev.WorkItemCreatedEvent):
-        self._id = event.originator_id
-        self._version = event.originator_version
         self._name = event.item_name
         self._content = event.content
         self._duedate = event.duedate
 
     @apply.register(ev.AttributeChangedEvent)
     def _(self, event: ev.AttributeChangedEvent):
-        self.__dict__[event.attribute_name] = event.attribute_value
-    
+        self.__dict__[event.attribute_name] = event.attribute_value   
+
     @property
     def name(self) -> str:
         """Return item name if not discarded"""
@@ -73,12 +62,14 @@ class WorkItem(Entity):
 
     @classmethod
     def create(cls, name: str, content: str, duedate: datetime.date):
+        item_id: uuid.UUID = uuid.uuid4()
         name = _validate_content(name)
         content = _validate_content(content)
         duedate = cls._validate_date(duedate)
-        event = ev.WorkItemCreatedEvent(name, content, duedate)
-        instance = cls([event])
-        instance.changes = [event]
+        event = ev.WorkItemCreatedEvent(item_id, name, content, duedate)
+        stream = EventStream(item_id, [event], 0)
+        instance = cls(stream)
+        instance._changes = [event]
         return instance
 
     @staticmethod
@@ -87,11 +78,18 @@ class WorkItem(Entity):
             raise ValueError("Duedate cannot be in the past")
         return date
 
+    def _can_discard(self) -> bool:
+        return True
+
+    def discard(self) -> None:
+        if self._can_discard():
+            self._discarded = True
+
     def update_name(self, name: str) -> None: 
         """Update workitem name"""
         self._check_not_discarded()
         name = _validate_content(name)
-        event = ev.AttributeChangedEvent(self.id, self.version, '_name', name)
+        event = ev.AttributeChangedEvent(self.uuid, '_name', name)
         self.apply(event)
         self.changes.append(event)
 
@@ -99,7 +97,7 @@ class WorkItem(Entity):
         """Update workitem content"""
         self._check_not_discarded()
         content = _validate_content(content)
-        event = ev.AttributeChangedEvent(self.id, self.version, '_content', content)
+        event = ev.AttributeChangedEvent(self.uuid,  '_content', content)
         self.apply(event)
         self.changes.append(event)
 
@@ -107,14 +105,14 @@ class WorkItem(Entity):
         """Update duedate for the workitem"""
         self._check_not_discarded()
         duedate = self._validate_date(date)
-        event = ev.AttributeChangedEvent(self.id, self.version, '_duedate', duedate)
+        event = ev.AttributeChangedEvent(self.uuid, '_duedate', duedate)
         self.apply(event)
         self.changes.append(event)
 
 
 class Column(Entity):
     def __init__(self, name: str):
-        super().__init__(uuid.uuid4(),0)
+        super().__init__(uuid.uuid4())
         self._name = name
         self._work_item_ids = []
 
@@ -135,7 +133,7 @@ class Column(Entity):
 
     def __contains__(self, item: WorkItem):
         for item_id in self._work_item_ids:
-            if item.id == item_id:
+            if item.uuid == item_id:
                 return True
         return False
 
@@ -147,12 +145,9 @@ class Column(Entity):
         self._name = name
 
 
-class Board(Entity):
-    def __init__(self, events: typing.List[ev.DomainEvent]):
-        super().__init__(None, None)
-        for event in events:
-            self.apply(event)
-        self.changes = [] 
+class Board(AggregateRoot):
+    def __init__(self, stream: EventStream):
+        super().__init__(stream)
         self._columns = []
 
     @property
@@ -161,17 +156,19 @@ class Board(Entity):
         return self._name
 
     @property
-    def desciption(self) -> str:
+    def description(self) -> str:
         self._check_not_discarded()
         return self._description
 
     @classmethod
     def create(cls, name: str, description: str):
+        board_uuid: uuid.UUID = uuid.uuid4()
         name = _validate_content(name)
         description = _validate_content(description)
-        event = ev.BoardCreatedEvent(name, description)
-        instance = cls([event])
-        instance.changes = [event]
+        event = ev.BoardCreatedEvent(board_uuid, name, description)
+        stream = EventStream(board_uuid, [event], 0)
+        instance = cls(stream)
+        instance._changes = [event]
         return instance
 
     def __contains__(self, item: WorkItem):
@@ -180,16 +177,23 @@ class Board(Entity):
                 return True
         return False
 
+    def _can_discard(self) -> bool:
+        return True
+
+    def discard(self) -> None:
+        if self._can_discard():
+            self._discarded = True
+
 
     def _column_with_id(self, column_id: uuid.UUID) -> Column:
         for column in self._columns:
-            if column.id == column_id:
+            if column.uuid == column_id:
                 return column
         raise ValueError(f"Column with id {column_id} not on board")
 
     def _column_index_with_id(self, column_id: uuid.UUID) -> int:
         for index, column in self._columns:
-            if column.id == column_id:
+            if column.uuid == column_id:
                 return index
         raise ValueError(f"Column with id {column_id} not on board")
 
@@ -212,7 +216,7 @@ class Board(Entity):
         self._check_not_discarded()
         if not name or len(name) < 1:
             raise ValueError("Board name can not be empty")
-        event = ev.AttributeChangedEvent(self.id, self.version, '_name', name)
+        event = ev.AttributeChangedEvent(self.uuid,  '_name', name)
         self.apply(event)
         self.changes.append(event)
 
@@ -220,7 +224,7 @@ class Board(Entity):
         self._check_not_discarded()
         if not desciption or len(desciption) < 1:
             raise ValueError("Board description can not be empty")
-        event = ev.AttributeChangedEvent(self.id, self.version, '_description', desciption)
+        event = ev.AttributeChangedEvent(self.uuid,  '_description', desciption)
         self.apply(event)
         self.changes.append(event)
 
@@ -228,7 +232,7 @@ class Board(Entity):
         """Add a new column to the board"""
         self._check_not_discarded()
         column_name = _validate_content(column_name)
-        event = ev.ColumnAddedEvent(self.id, self.version, column_name)
+        event = ev.ColumnAddedEvent(self.uuid, column_name)
         self.apply(event)
         self.changes.append(event)
 
@@ -239,7 +243,7 @@ class Board(Entity):
         self._check_not_discarded()
         name = _validate_content(name)
         target_column_index = self._column_index_with_id(target_column_id)
-        event = ev.ColumnInsertedEvent(self.id, self.version, target_column_index, name)
+        event = ev.ColumnInsertedEvent(self.uuid,  target_column_index, name)
         self.app(event)
         self.changes.append(event)
 
@@ -250,17 +254,17 @@ class Board(Entity):
         self._check_not_discarded()
         name = _validate_content(name)
         target_column_index = self._column_index_with_id(target_column_id)
-        event = ev.ColumnInsertedEvent(self.id, self.version, target_column_index+1, name)
+        event = ev.ColumnInsertedEvent(self.uuid,  target_column_index+1, name)
         self.app(event)
         self.changes.append(event)
 
     def remove_column(self, column: Column):
         self._check_not_discarded()
         if self._can_remove_column(column):
-            event = ev.ColumnRemovedEvent(self.id, self.version, column.id)
+            event = ev.ColumnRemovedEvent(self.uuid,  column.uuid)
             self.apply(event)
             self.changes.append(event)
-        raise ColumnNotEmptyError(f"Cannot remove column {column.id}")
+        raise ColumnNotEmptyError(f"Cannot remove column {column.uuid}")
 
     def remove_column_with_id(self, column_id: uuid.UUID):
         self._check_not_discarded()
@@ -271,18 +275,18 @@ class Board(Entity):
         """Queue workitem on first column"""
         self._check_not_discarded()
         if item.discarded: # ensure item is still in use
-            raise DiscardedEntityError(f"Workitem {item.id} is no longer in use")
+            raise DiscardedEntityError(f"Workitem {item.uuid} is no longer in use")
 
         if len(self._columns) < 1: # ensure board has columns
             raise ConstraintError("Board has no columns")
 
         if item in self: # ensure item not already on board
-            raise ConstraintError(f"Workitem {item.id} already on board")
+            raise ConstraintError(f"Workitem {item.uuid} already on board")
         
         first_column: Column = self._columns[0]
         if first_column.discarded: # ensure first column is not discarded
-            raise DiscardedEntityError(f"Column {first_column.id} is no longer in use")
-        event = ev.WorkItemScheduledEvent(self.id, self.version, item.id)
+            raise DiscardedEntityError(f"Column {first_column.uuid} is no longer in use")
+        event = ev.WorkItemScheduledEvent(self.uuid, item.uuid)
         self.apply(event)
         self.changes.append(event)
 
@@ -290,15 +294,15 @@ class Board(Entity):
         """Move workitem to the next column"""
         self._check_not_discarded()
         if item.discarded: # ensure item is still in use
-            raise DiscardedEntityError(f"Workitem {item.id} is no longer in use")
-        source_column_index, priority = self._find_work_item_by_id(item.id)
+            raise DiscardedEntityError(f"Workitem {item.uuid} is no longer in use")
+        source_column_index, priority = self._find_work_item_by_id(item.uuid)
         destination_column_index: int = source_column_index + 1
         if destination_column_index >= len(self._columns):
-            raise ConstraintError(f"Cannot advance workitem {item.id} from last column")
+            raise ConstraintError(f"Cannot advance workitem {item.uuid} from last column")
         destination_column: Column = self._columns[destination_column_index]
         if destination_column.discarded:
-            raise DiscardedEntityError(f"Column {destination_column.id} is no longer in use")
-        event = ev.WorkItemAdvancedEvent(self.id, self.version, item.id, source_column_index)
+            raise DiscardedEntityError(f"Column {destination_column.uuid} is no longer in use")
+        event = ev.WorkItemAdvancedEvent(self.uuid, item.uuid, source_column_index)
         self.apply(event)
         self.changes.append(event)
 
@@ -306,14 +310,14 @@ class Board(Entity):
         """ Retire work item from the last column"""
         self._check_not_discarded()
         if item.discarded: # ensure item is still in use
-            raise DiscardedEntityError(f"Workitem {item.id} is no longer in use")
+            raise DiscardedEntityError(f"Workitem {item.uuid} is no longer in use")
         try:
-            priority = self._columns[-1].work_item_ids.index(item.id)
+            priority = self._columns[-1].work_item_ids.index(item.uuid)
         except IndexError:
-            raise ConstraintError(f"Cannot retire item {item.id} from a board with no columns")
+            raise ConstraintError(f"Cannot retire item {item.uuid} from a board with no columns")
         except ValueError:
-            raise ConstraintError(f"{item.id} not available for retiring from last column of board")
-        event = ev.WorkItemRetiredEvent(self.id, self.version, item.id)
+            raise ConstraintError(f"{item.uuid} not available for retiring from last column of board")
+        event = ev.WorkItemRetiredEvent(self.uuid,  item.uuid)
         self.apply(event)
         self.changes.append(event)
     
@@ -323,8 +327,6 @@ class Board(Entity):
 
     @apply.register(ev.BoardCreatedEvent)
     def _(self, event: ev.BoardCreatedEvent):
-        self._id = event.originator_id
-        self._version = event.originator_version
         self._name = event.board_name
         self._description = event.description
 

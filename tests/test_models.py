@@ -8,7 +8,7 @@ def test_init_workitem():
     workitem = WorkItem.create("test","this is a test workitem",datetime.date.today())
     assert not workitem.discarded
     assert workitem.version == 0
-    assert workitem.id is not None
+    assert workitem.uuid is not None
 
 
 def test_update_workitem():
@@ -32,9 +32,9 @@ def test_wrong_update_workitem():
 def test_init_board():
     board = Board.create("board", "a test board")
     assert not board.discarded
-    assert board.id is not None
+    assert board.uuid is not None
     assert board.name == "board"
-    assert board.desciption == "a test board"
+    assert board.description == "a test board"
     assert len(board._columns) == 0
 
 def test_add_column_to_board():

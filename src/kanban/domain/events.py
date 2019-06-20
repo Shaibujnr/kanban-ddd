@@ -1,7 +1,6 @@
 import datetime
 import uuid
 
-
 utc_now = datetime.datetime.now(datetime.timezone.utc).timestamp()
 
 
@@ -102,3 +101,49 @@ class WorkItemAdvancedEvent(DomainEvent):
 class WorkItemRetiredEvent(DomainEvent):
     def __init__(self, board_uuid: uuid.UUID, item_id: uuid.UUID):
         super().__init__(board_uuid, item_id=item_id)
+
+
+__event_handlers = {}
+
+
+def subscribe(handler, event_predicate):
+    """
+    Subscribe to events
+
+    Args:
+        handler: a callable funtion which handles the passed event
+        event_predicate: a callable which determines if the event should be handled
+    """
+    if event_predicate not in __event_handlers:
+        __event_handlers[event_predicate] = set()
+    __event_handlers[event_predicate].add(handler)
+
+
+def unsubscribe(handler, event_predicate):
+    """Unsubscribe from events.
+
+    Args:
+        handler: The subscriber to disconnect.
+        event_predicate: The callable predicate which was used to identify the events to which to subscribe.
+    """
+    if event_predicate in __event_handlers:
+        __event_handlers[event_predicate].discard(handler)
+
+
+def publish(event):
+    """
+    Send an event to all subscribers.
+     
+     Each subscriber will receive each event only once, even if it has been subscribed multiple
+     times, possibly with different predicates.
+
+     Args:
+         event: The object to be tested against by all registered predicate functions and sent to
+         all matching subscribers.
+    """
+    matching_handlers = set()
+    for event_predicate, handlers in __event_handlers.items():
+        if event_predicate(event):
+            matching_handlers.update(handlers)
+    for handler in matching_handlers:
+        handler(event)

@@ -1,73 +1,30 @@
 import datetime
 import pytest
-from kanban.domain.models import WorkItem, Column, Board
+from kanban.domain.models import WorkItem
 import kanban.errors as kanban_error
 
 
-def test_init_workitem():
-    workitem = WorkItem.create("test","this is a test workitem",datetime.date.today())
-    assert not workitem.discarded
-    assert workitem.version == 0
-    assert workitem.uuid is not None
+def test_create_workitem():
+	item: WorkItem = WorkItem.__create__(name='hello', content="hi", duedate=datetime.date.today())
+	assert item.id, item.id
+	assert item.__version__ == 0, item.__version__
+	assert len(item.__pending_events__) > 0
+	assert not item.board_id
 
 
 def test_update_workitem():
-    wi = WorkItem.create("test", "content", datetime.date.today())
-    assert not wi.discarded
-    wi.update_content('updated content')
-    assert wi.content == 'updated content'
-    wi.update_name("hello")
-    assert wi.name == "hello"
-    wi.update_duedate(datetime.date.fromtimestamp(129999900000))
-    assert wi.duedate != datetime.date.today()
-    assert len(wi.changes) == 4
-
-
-def test_wrong_update_workitem():
-    wi = WorkItem.create("hello", "content", datetime.date.today())
-    assert not wi.discarded
-    with pytest.raises(ValueError):
-        wi.update_name("")
-
-def test_init_board():
-    board = Board.create("board", "a test board")
-    assert not board.discarded
-    assert board.uuid is not None
-    assert board.name == "board"
-    assert board.description == "a test board"
-    assert len(board._columns) == 0
-
-def test_add_column_to_board():
-    board = Board.create("board", "test")
-    assert not board.discarded
-    assert len(board._columns) == 0
-    board.add_new_column("column_one")
-    assert len(board._columns) == 1
-
-def test_schedule_work_item_on_board_with_no_columns():
-    item = WorkItem.create("wi", "item content", datetime.date.today())
-    board = Board.create('board', 'test board')
-    assert board._columns == []
-    with pytest.raises(kanban_error.ConstraintError):
-        board.schedule_work_item(item)
-
-def test_workitem_cycle():
-    item = WorkItem.create("wi", "item content", datetime.date.today())
-    board = Board.create('board', 'test board')
-    assert board._columns == []
-    board.add_new_column("column_one")
-    board.add_new_column("column_two")
-    board.add_new_column("column_three")
-    assert len(board._columns) == 3
-    assert item not in board
-    board.schedule_work_item(item)
-    assert item in board
-    assert item in board._columns[0]
-    board.advance_work_item(item)
-    assert item not in board._columns[0]
-    assert item in board._columns[1]
-    board.advance_work_item(item)
-    assert item not in board._columns[1]
-    assert item in board._columns[2]
-    board.retire_work_item(item)
-    assert item not in board._columns[2]
+	item: WorkItem = WorkItem.__create__(
+		name="initial", 
+		content="lorem", 
+		duedate=datetime.date.today()
+	)
+	assert item.id, item.id
+	assert item.__version__ == 0, item.__version__
+	assert len(item.__pending_events__)   == 1
+	item.name = "final name"
+	assert len(item.__pending_events__) == 2
+	assert item.name == "final name"
+	item.content = item.content+" ipsum"
+	assert len(item.__pending_events__) == 3
+	assert item.content == "lorem ipsum"
+	assert not item.board_id

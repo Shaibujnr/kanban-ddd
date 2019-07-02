@@ -1,88 +1,10 @@
 import datetime
-import typing
 import uuid
+from .workitem import WorkItem
+from .column import Column
 from eventsourcing.domain.model.aggregate import AggregateRoot
-from eventsourcing.domain.model.events import DomainEvent
-from eventsourcing.domain.model.entity import DomainEntity
 from eventsourcing.domain.model.decorators import attribute
-
-
-class Column(DomainEntity):
-    def __init__(self, name: str, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if not name:
-            raise Exception("Column name must cannot be empty")
-        self._name = name
-        self._workitem_ids = []
-
-    def __contains__(self, workitem):
-        for workitem_id in self.workitem_ids:
-            if workitem.id == workitem_id:
-                return True
-        return False
-
-    @classmethod
-    def __create__(cls, *args, **kwargs):
-        """override this method to prevent event from being triggered"""
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def workitem_ids(self):
-        return self._workitem_ids
-
-    @property
-    def is_empty(self) -> bool:
-        return len(self.workitem_ids) == 0
-
-    def change_name(self, name: str):
-        self.__assert_not_discarded__()
-        if not name:
-            raise Exception("Column name must cannot be empty")
-        self._name = name
-
-
-class WorkItem(AggregateRoot):
-    """Workitem class for holding tasks
-    """
-
-    class Event(AggregateRoot.Event, DomainEvent):
-        """Base class for all workitem events"""
-
-    class Created(Event, AggregateRoot.Created):
-        """Event for workitem created"""
-
-    class AttributeChanged(Event, AggregateRoot.AttributeChanged):
-        """Event for attribute changed"""
-
-    def __init__(self, name: str, content: str, duedate: datetime.date, 
-        board_id: uuid.UUID, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._name = name
-        self._content = content
-        self._duedate = duedate
-        self._board_id = board_id
-
-    @attribute
-    def name(self) -> str:
-        """ workitem name"""
-
-    @attribute
-    def content(self) -> str:
-        """ workitem content """
-
-    @attribute
-    def duedate(self) -> datetime.date:
-        """ workitem duedate """
-
-    # TODO use methods that actually depict meaning on the domain and trigger the
-    # appropraite event rather than use attributes
-
-    @property
-    def board_id(self) -> uuid.UUID:
-        return self._board_id
+from eventsourcing.domain.model.events import DomainEvent
 
 
 class Board(AggregateRoot):
